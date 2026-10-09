@@ -1,5 +1,7 @@
+import { Window as DOMWindow } from "happy-dom";
 import { expect, onTestFinished, test, vi } from "vitest";
 import {
+  addGlobalEventListener,
   fireBlurEvent,
   fireClickEvent,
   fireEvent,
@@ -474,4 +476,53 @@ test("fireClickEvent falls back when a document answers its default view with an
 
   expect(received).toHaveLength(1);
   expect(received[0]).toBeInstanceOf(PointerEvent);
+});
+
+test("addGlobalEventListener registers and releases child frames when window.frames is overwritten", async () => {
+  const scope = new DOMWindow();
+  scope.document.body.innerHTML = "<iframe></iframe>";
+  const child = scope.document.querySelector("iframe")!
+    .contentWindow! as DOMWindow;
+  // happy-dom creates iframe windows but does not expose Window's native indices.
+  Object.defineProperties(scope, { length: { value: 1 }, 0: { value: child } });
+  Object.defineProperty(scope, "frames", {
+    value: function frames(_value: unknown, _pattern: unknown) {},
+    configurable: true,
+  });
+  vi.stubGlobal("window", scope);
+  const originalAdd = scope.document.addEventListener.bind(scope.document);
+  let registrations = 0;
+  const add = vi
+    .spyOn(scope.document, "addEventListener")
+    .mockImplementation((...args) => {
+      // Bound the unfixed recursion so failure cannot exhaust the test worker.
+      if (++registrations > 100)
+        throw new Error("Repeated top-window registration");
+      originalAdd(...args);
+    });
+  const childAdd = vi.spyOn(child.document, "addEventListener");
+  const listener = vi.fn();
+  let remove: (() => void) | undefined;
+  try {
+    remove = addGlobalEventListener(
+      "click",
+      listener,
+      true,
+      scope as unknown as Window,
+    );
+    expect(add).toHaveBeenCalledTimes(1);
+    expect(childAdd).toHaveBeenCalledTimes(1);
+    scope.document.dispatchEvent(new scope.Event("click"));
+    child.document.dispatchEvent(new child.Event("click"));
+    expect(listener).toHaveBeenCalledTimes(2);
+    remove();
+    scope.document.dispatchEvent(new scope.Event("click"));
+    child.document.dispatchEvent(new child.Event("click"));
+    expect(listener).toHaveBeenCalledTimes(2);
+  } finally {
+    remove?.();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    await scope.happyDOM.abort();
+  }
 });

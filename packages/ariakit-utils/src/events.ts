@@ -340,7 +340,8 @@ export function addGlobalEventListener(
   // Prevent errors from "sandbox" frames.
   try {
     scope.document.addEventListener(type, listener, options);
-    for (const frame of Array.from(scope.frames)) {
+    // Window itself indexes child frames; libraries can overwrite its frames alias.
+    for (const frame of Array.from(scope)) {
       children.push(addGlobalEventListener(type, listener, options, frame));
     }
   } catch {}
